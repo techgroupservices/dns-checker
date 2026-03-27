@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Security DNS Checker</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+h1 { font-size: 1.3rem; font-weight: 700; color: #7dd3fc; margin-bottom: 4px; }
+.subtitle { font-size: 0.8rem; color: #94a3b8; margin-bottom: 20px; }
+.input-row { display: flex; gap: 8px; margin-bottom: 20px; }
+input { flex: 1; background: #1e2330; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; color: #e2e8f0; font-size: 0.95rem; outline: none; }
+input:focus { border-color: #7dd3fc; }
+button { background: #0ea5e9; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+button:hover { background: #38bdf8; }
+button:disabled { background: #334155; color: #64748b; cursor: default; }
+.card { background: #1e2330; border: 1px solid #2d3748; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+.card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.badge { font-size: 0.7rem; font-weight: 700; padding: 3px 8px; border-radius: 20px; }
+.badge.pass { background: #14532d; color: #4ade80; }
+.badge.fail { background: #450a0a; color: #f87171; }
+.badge.warn { background: #422006; color: #fb923c; }
+.badge.info { background: #1e3a5f; color: #7dd3fc; }
+.record-label { font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 10px; margin-bottom: 4px; }
+.record-block { position: relative; background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 8px 10px; margin-bottom: 4px; }
+.record-value { font-family: monospace; font-size: 0.8rem; color: #a5f3fc; word-break: break-all; padding-right: 60px; }
+.record-block.recommended { border-color: #1d4ed8; background: #0c1a35; }
+.record-block.recommended .record-value { color: #93c5fd; }
+.copy-btn { position: absolute; top: 6px; right: 6px; background: #1e3a5f; color: #7dd3fc; border: none; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
+.copy-btn:hover { background: #1d4ed8; color: #fff; }
+.copy-btn.copied { background: #14532d; color: #4ade80; }
+.note { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
+.note.good { color: #4ade80; }
+.note.bad { color: #f87171; }
+.note.warn { color: #fb923c; }
+.section-title { font-size: 0.85rem; font-weight: 700; color: #7dd3fc; }
+#results { display: none; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #334155; border-top-color: #7dd3fc; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.summary-pill { font-size: 0.75rem; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-bottom: 16px; display: inline-block; }
+.rec-tag { font-size: 0.68rem; font-weight: 700; color: #93c5fd; background: #1e3a5f; border-radius: 3px; padding: 1px 5px; margin-left: 6px; }
+.selector-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.selector-row input { flex: 1; font-size: 0.85rem; padding: 7px 10px; }
+.selector-row button { padding: 7px 14px; font-size: 0.82rem; }
+.selector-label { font-size: 0.78rem; color: #94a3b8; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Email Security DNS Checker</h1>
+<p class="subtitle">Check SPF, DKIM, DMARC, MX, and NS records for any domain</p>
+
+<div class="input-row">
+  <input type="text" id="domainInput" placeholder="Enter domain (e.g. example.com)" />
+  <button id="checkBtn">Check</button>
+</div>
+
+<div id="loading" style="display:none; color:#94a3b8; font-size:0.9rem; margin-bottom:16px;">
+  <span class="spinner"></span> Looking up DNS records...
+</div>
+
+<div id="results">
+  <div id="summaryBar"></div>
+  <div id="spfCard"></div>
+  <div id="dkimCard"></div>
+  <div id="dmarcCard"></div>
+  <div id="mxCard"></div>
+  <div id="nsCard"></div>
+</div>
+
+<script>
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function copyText(btn, text) {
+  function finish() {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+  }
+  function fallback() {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); finish(); } catch(e) { alert('Copy failed — please select and copy manually.'); }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(finish).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+function codeBlock(value, recommended) {
+  var cls = recommended ? 'record-block recommended' : 'record-block';
+  return '<div class="' + cls + '"><div class="record-value">' + escHtml(value) + '</div><button class="copy-btn" onclick="copyText(this,' + JSON.stringify(value) + ')">Copy</button></div>';
+}
+
+function dnsLookup(name, type) {
+  var url = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(name) + '&type=' + type;
+  return fetch(url, { headers: { 'Accept': 'application/dns-json' } }).then(function(r) {
+    if (!r.ok) throw new Error('DNS query failed');
+    return r.json();
+  });
+}
+
+function checkDomain() {
+  var raw = document.getElementById('domainInput').value.trim();
+  var domain = raw.replace(/^https?:\/\//,'').replace(/\/.*/,'');
+  if (!domain) return;
+
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('checkBtn').disabled = true;
+
+  Promise.all([
+    dnsLookup(domain, 'TXT'),
+    dnsLookup('_dmarc.' + domain, 'TXT'),
+    dnsLookup(domain, 'MX'),
+    dnsLookup(domain, 'NS')
+  ]).then(function(results) {
+    renderResults(domain, results[0], results[1], results[2], results[3]);
+  }).catch(function(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('results').innerHTML = '<div class="card"><p class="note bad">Error: ' + escHtml(e.message) + '</p></div>';
+    document.getElementById('results').style.display = 'block';
+  }).finally(function() {
+    document.getElementById('checkBtn').disabled = false;
+  });
+}
+
+function checkDkim(domain, selector) {
+  var name = selector + '._domainkey.' + domain;
+  var card = document.getElementById('dkimCard');
+  card.innerHTML = '<div class="card"><div class="card-header"><span class="section-title">DKIM Record</span><span class="badge info"><span class="spinner"></span></span></div><p class="note" style="margin-top:4px">Checking selector: ' + escHtml(selector) + '...</p></div>';
+
+  dnsLookup(name, 'TXT').then(function(data) {
+    var txtRecords = (data.Answer || []).filter(function(r) { return r.type === 16; });
+    var dkimRecord = null;
+    for (var i = 0; i < txtRecords.length; i++) {
+      var v = txtRecords[i].data.replace(/"/g,'').trim();
+      if (v.indexOf('v=DKIM1') === 0 || v.indexOf('k=') !== -1 || v.indexOf('p=') !== -1) {
+        dkimRecord = v; break;
+      }
+    }
+    renderDkim(domain, selector, dkimRecord);
+  }).catch(function() {
+    renderDkim(domain, selector, null);
+  });
+}
+
+function renderDkim(domain, selector, dkimRecord) {
+  var dkimStatus, dkimNote, dkimClass;
+  if (!dkimRecord) {
+    dkimStatus = 'NOT FOUND'; dkimClass = 'warn';
+    dkimNote = '<span class="note warn">No DKIM record found for selector <strong>' + escHtml(selector) + '</strong>. Try a different selector, or check with your email provider for the correct one.</span>';
+  } else {
+    dkimStatus = 'FOUND'; dkimClass = 'pass';
+    var hasKey = dkimRecord.indexOf('p=') !== -1 && dkimRecord.replace(/p=/,'').trim().length > 2;
+    dkimNote = hasKey
+      ? '<span class="note good">DKIM public key found for selector <strong>' + escHtml(selector) + '</strong>. Emails signed with this selector can be verified.</span>'
+      : '<span class="note warn">DKIM record found but public key (p=) appears empty — key may be revoked.</span>';
+  }
+
+  var commonSelectors = ['google', 'selector1', 'selector2', 'default', 'mail', 'dkim', 'k1', 'smtp', 'mimecast', 'proofpoint'];
+  var selectorBtns = commonSelectors.map(function(s) {
+    return '<button onclick="checkDkim(' + JSON.stringify(domain) + ',' + JSON.stringify(s) + ')" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;margin:2px">' + escHtml(s) + '</button>';
+  }).join('');
+
+  var html = '<div class="card">'
+    + '<div class="card-header"><span class="section-title">DKIM Record</span><span class="badge ' + dkimClass + '">' + dkimStatus + '</span></div>'
+    + (dkimRecord ? '<div class="record-label">Current Record <span class="rec-tag">Selector: ' + escHtml(selector) + '</span></div>' + codeBlock(dkimRecord, false) : '')
+    + dkimNote
+    + '<div class="record-label" style="margin-top:12px">Try a different selector</div>'
+    + '<div class="selector-row">'
+    + '<input type="text" id="selectorInput" value="' + escHtml(selector) + '" placeholder="e.g. google, selector1, default" />'
+    + '<button onclick="runCustomSelector(' + JSON.stringify(domain) + ')">Look Up</button>'
+    + '</div>'
+    + '<p class="selector-label">Common selectors:</p>'
+    + '<div>' + selectorBtns + '</div>'
+    + '</div>';
+
+  document.getElementById('dkimCard').innerHTML = html;
+}
+
+function runCustomSelector(domain) {
+  var sel = document.getElementById('selectorInput').value.trim();
+  if (sel) checkDkim(domain, sel);
+}
+
+function renderResults(domain, spfData, dmarcData, mxData, nsData) {
+  document.getElementById('loading').style.display = 'none';
+
+  // SPF
+  var txtRecords = (spfData.Answer || []).filter(function(r) { return r.type === 16; });
+  var spfRecord = null;
+  for (var i = 0; i < txtRecords.length; i++) {
+    var val = txtRecords[i].data.replace(/"/g,'').trim();
+    if (val.indexOf('v=spf1') === 0) { spfRecord = val; break; }
+  }
+  var spfRecommended = 'v=spf1 include:_spf.' + domain + ' mx -all';
+  var spfStatus, spfNote, spfClass, spfRec = '';
+
+  if (!spfRecord) {
+    spfStatus = 'MISSING'; spfClass = 'fail';
+    spfNote = '<span class="note bad">No SPF record found. Anyone can send email as this domain.</span>';
+    spfRec = '<div class="record-label">Recommended Record <span class="rec-tag">Add as TXT on @</span></div>' + codeBlock(spfRecommended, true) + '<p class="note warn" style="margin-top:4px">Adjust the include: to match your email provider.</p>';
+  } else if (spfRecord.indexOf('+all') !== -1) {
+    spfStatus = 'FAIL'; spfClass = 'fail';
+    spfNote = '<span class="note bad">SPF uses +all — allows anyone to send email. Fix immediately.</span>';
+    spfRec = '<div class="record-label">Recommended Fix <span class="rec-tag">Replace TXT on @</span></div>' + codeBlock(spfRecord.replace('+all','-all'), true);
+  } else if (spfRecord.indexOf('~all') !== -1) {
+    spfStatus = 'WARN'; spfClass = 'warn';
+    spfNote = '<span class="note warn">SPF uses ~all (soft fail). Consider upgrading to -all.</span>';
+    spfRec = '<div class="record-label">Recommended Fix <span class="rec-tag">Update TXT on @</span></div>' + codeBlock(spfRecord.replace('~all','-all'), true);
+  } else {
+    spfStatus = 'PASS'; spfClass = 'pass';
+    spfNote = '<span class="note good">SPF uses -all (hard fail) — strict enforcement.</span>';
+  }
+
+  document.getElementById('spfCard').innerHTML = '<div class="card"><div class="card-header"><span class="section-title">SPF Record</span><span class="badge ' + spfClass + '">' + spfStatus + '</span></div>' + (spfRecord ? '<div class="record-label">Current Record</div>' + codeBlock(spfRecord, false) : '') + spfNote + spfRec + '</div>';
+
+  // DKIM — try common selectors automatically
+  document.getElementById('dkimCard').innerHTML = '<div class="card"><div class="card-header"><span class="section-title">DKIM Record</span><span class="badge info"><span class="spinner"></span></span></div><p class="note" style="margin-top:4px">Scanning common selectors...</p></div>';
+  var commonSelectors = ['google', 'selector1', 'selector2', 'default', 'mail', 'dkim', 'k1', 'smtp', 'mimecast', 'proofpoint'];
+  var found = false;
+  var checked = 0;
+  commonSelectors.forEach(function(sel) {
+    dnsLookup(sel + '._domainkey.' + domain, 'TXT').then(function(data) {
+      checked++;
+      if (found) return;
+      var txtRecs = (data.Answer || []).filter(function(r) { return r.type === 16; });
+      for (var i = 0; i < txtRecs.length; i++) {
+        var v = txtRecs[i].data.replace(/"/g,'').trim();
+        if (v.indexOf('v=DKIM1') === 0 || v.indexOf('p=') !== -1) {
+          found = true;
+          renderDkim(domain, sel, v);
+          return;
+        }
+      }
+      if (checked === commonSelectors.length && !found) {
+        renderDkim(domain, 'selector1', null);
+      }
+    }).catch(function() {
+      checked++;
+      if (checked === commonSelectors.length && !found) {
+        renderDkim(domain, 'selector1', null);
+      }
+    });
+  });
+
+  // DMARC
+  var dmarcTxt = (dmarcData.Answer || []).filter(function(r) { return r.type === 16; });
+  var dmarcRecord = null;
+  for (var j = 0; j < dmarcTxt.length; j++) {
+    var dv = dmarcTxt[j].data.replace(/"/g,'').trim();
+    if (dv.indexOf('v=DMARC1') === 0) { dmarcRecord = dv; break; }
+  }
+  var dmarcRecommended = 'v=DMARC1; p=reject; rua=mailto:dmarc-reports@' + domain + '; fo=1';
+  var dmarcStatus, dmarcNote, dmarcClass, dmarcRec = '';
+
+  if (!dmarcRecord) {
+    dmarcStatus = 'MISSING'; dmarcClass = 'fail';
+    dmarcNote = '<span class="note bad">No DMARC record found. Domain is unprotected from spoofing.</span>';
+    dmarcRec = '<div class="record-label">Recommended Record <span class="rec-tag">Add as TXT on _dmarc</span></div>' + codeBlock(dmarcRecommended, true) + '<p class="note warn" style="margin-top:4px">Start with p=none to monitor, then move to p=quarantine, then p=reject.</p>';
+  } else {
+    var pMatch = dmarcRecord.match(/p=(\w+)/);
+    var policy = pMatch ? pMatch[1] : 'none';
+    var hasRua = /rua=/i.test(dmarcRecord);
+    if (policy === 'reject') {
+      dmarcStatus = 'PASS'; dmarcClass = 'pass';
+      dmarcNote = '<span class="note good">Policy is p=reject — strongest protection.</span>';
+    } else if (policy === 'quarantine') {
+      dmarcStatus = 'WARN'; dmarcClass = 'warn';
+      dmarcNote = '<span class="note warn">Policy is p=quarantine. Consider upgrading to p=reject.</span>';
+      dmarcRec = '<div class="record-label">Recommended Fix <span class="rec-tag">Update TXT on _dmarc</span></div>' + codeBlock(dmarcRecord.replace('p=quarantine','p=reject'), true);
+    } else {
+      dmarcStatus = 'WARN'; dmarcClass = 'warn';
+      dmarcNote = '<span class="note warn">Policy is p=none — monitoring only, no enforcement.</span>';
+      dmarcRec = '<div class="record-label">Recommended Fix <span class="rec-tag">Update TXT on _dmarc</span></div>' + codeBlock(dmarcRecord.replace('p=none','p=reject'), true);
+    }
+    dmarcNote += hasRua ? '<br><span class="note good">RUA reporting address configured.</span>' : '<br><span class="note warn">No RUA reporting address — you will not receive DMARC reports.</span>';
+  }
+
+  document.getElementById('dmarcCard').innerHTML = '<div class="card"><div class="card-header"><span class="section-title">DMARC Record</span><span class="badge ' + dmarcClass + '">' + dmarcStatus + '</span></div>' + (dmarcRecord ? '<div class="record-label">Current Record</div>' + codeBlock(dmarcRecord, false) : '') + dmarcNote + dmarcRec + '</div>';
+
+  // MX
+  var mxRecords = (mxData.Answer || []).filter(function(r) { return r.type === 15; });
+  var mxClass = mxRecords.length ? 'pass' : 'info';
+  var mxNote = mxRecords.length ? '<span class="note good">' + mxRecords.length + ' MX record(s) found.</span>' : '<span class="note">No MX records — domain may not receive email.</span>';
+  var mxBlocks = mxRecords.map(function(r) { return codeBlock(r.data, false); }).join('');
+  document.getElementById('mxCard').innerHTML = '<div class="card"><div class="card-header"><span class="section-title">MX Records</span><span class="badge ' + mxClass + '">' + (mxRecords.length ? 'FOUND' : 'NONE') + '</span></div>' + (mxRecords.length ? '<div class="record-label">Current Records</div>' + mxBlocks : '') + mxNote + '</div>';
+
+  // NS
+  var nsRecords = (nsData.Answer || []).filter(function(r) { return r.type === 2; });
+  var nsClass = nsRecords.length ? 'pass' : 'fail';
+  var nsNames = nsRecords.map(function(r) { return r.data.toLowerCase(); });
+  var provider = '';
+  if (nsNames.some(function(n) { return n.indexOf('cloudflare') !== -1; })) provider = 'Cloudflare';
+  else if (nsNames.some(function(n) { return n.indexOf('awsdns') !== -1; })) provider = 'AWS Route 53';
+  else if (nsNames.some(function(n) { return n.indexOf('godaddy') !== -1 || n.indexOf('domaincontrol') !== -1; })) provider = 'GoDaddy';
+  else if (nsNames.some(function(n) { return n.indexOf('google') !== -1; })) provider = 'Google Domains';
+  else if (nsNames.some(function(n) { return n.indexOf('azure') !== -1; })) provider = 'Azure DNS';
+  else if (nsNames.some(function(n) { return n.indexOf('squarespace') !== -1; })) provider = 'Squarespace';
+  else if (nsNames.some(function(n) { return n.indexOf('namebright') !== -1; })) provider = 'NameBright';
+  var nsNote = nsRecords.length ? '<span class="note good">' + nsRecords.length + ' NS record(s) found' + (provider ? ' — DNS hosted on ' + provider : '') + '.</span>' : '<span class="note bad">No NS records found.</span>';
+  var nsBlocks = nsRecords.map(function(r) { return codeBlock(r.data, false); }).join('');
+  document.getElementById('nsCard').innerHTML = '<div class="card"><div class="card-header"><span class="section-title">NS Records (Nameservers)</span><span class="badge ' + nsClass + '">' + (nsRecords.length ? 'FOUND' : 'MISSING') + '</span></div>' + (nsRecords.length ? '<div class="record-label">Current Records</div>' + nsBlocks : '') + nsNote + '</div>';
+
+  // Summary
+  var classes = [spfClass, dmarcClass];
+  var anyFail = classes.indexOf('fail') !== -1;
+  var anyWarn = classes.indexOf('warn') !== -1;
+  var summaryColor = anyFail ? '#f87171' : anyWarn ? '#fb923c' : '#4ade80';
+  var summaryText = anyFail ? 'Issues Found — Action Required' : anyWarn ? 'Improvements Recommended' : 'Good Configuration';
+  document.getElementById('summaryBar').innerHTML = '<div class="summary-pill" style="background:#1e2330;border:1px solid ' + summaryColor + ';color:' + summaryColor + '">' + summaryText + ' for ' + escHtml(domain) + '</div>';
+  document.getElementById('results').style.display = 'block';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('checkBtn').addEventListener('click', checkDomain);
+  document.getElementById('domainInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') checkDomain();
+  });
+});
+</script>
+</body>
+</html>
